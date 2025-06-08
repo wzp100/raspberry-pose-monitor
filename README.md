@@ -26,6 +26,8 @@ the input image.
 *   Use this command to run the pose estimation sample using the default
     `movenet_lightning` model.
 
+
+直接运行姿势识别的示例，只是去识别各个关节点
 ```
 python3 pose_estimation.py
 ```
@@ -37,6 +39,7 @@ python3 pose_estimation.py
         * Multi-poses: `movenet_multipose`
     *   The default value is `movenet_lightning`.
 
+指定模型名称来运行姿势识别示例
 ```
 python3 pose_estimation.py --model movenet_thunder
 ```
@@ -46,9 +49,14 @@ python3 pose_estimation.py --model movenet_thunder
 *   Use this command to run the pose estimation sample using the default
     `movenet_lightning` pose estimation model and the `classifier.tflite` yoga
     pose classification model.
-
+运行姿势识别和分类的示例，使用默认的 `movenet_lightning` 姿势识别模型和 `classifier.tflite` 姿势分类模型
 ```
 python3 pose_estimation.py    --classifier classifier      --label_file labels.txt
+```
+
+
+```
+ python3 pose_estimation.py    --classifier sitting_pose_classifier   --label_file pose_labels.txt
 ```
 
 *   If you want to train a custom pose classification model, check out
