@@ -38,7 +38,7 @@ python3 pose_estimation.py
     *   The default value is `movenet_lightning`.
 
 ```
-python3 pose_estimation.py --model_name movenet_thunder
+python3 pose_estimation.py --model movenet_thunder
 ```
 
 ## Run the pose classification sample
@@ -48,9 +48,7 @@ python3 pose_estimation.py --model_name movenet_thunder
     pose classification model.
 
 ```
-python3 pose_estimation.py \
-    --classifier classifier
-    --label_file labels.txt
+python3 pose_estimation.py    --classifier classifier      --label_file labels.txt
 ```
 
 *   If you want to train a custom pose classification model, check out

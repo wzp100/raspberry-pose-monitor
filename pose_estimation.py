@@ -12,10 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Main script to run pose classification and pose estimation."""
+
 import argparse
 import logging
 import sys
-import time
+import time,os
 
 import cv2
 from ml import Classifier
@@ -23,136 +24,114 @@ from ml import Movenet
 from ml import MoveNetMultiPose
 from ml import Posenet
 import utils
+from picamera2 import Picamera2
 
+def run(estimation_model: str,
+        tracker_type: str,
+        classification_model: str,
+        label_file: str,
+        camera_id: int,
+        width: int,
+        height: int) -> None:
+    """使用 Picamera2 从 CSI 摄像头读取画面并做姿态估计/分类"""
 
-def run(estimation_model: str, tracker_type: str, classification_model: str,
-        label_file: str, camera_id: int, width: int, height: int) -> None:
-  """Continuously run inference on images acquired from the camera.
+    # 1. 配置并启动 Picamera2
+    picam2 = Picamera2()
+    cfg = picam2.create_preview_configuration(
+        main={"format": "RGB888", "size": (width, height)}
+    )
+    picam2.configure(cfg)
+    picam2.start()
+    time.sleep(1)  # 等待自动对焦/曝光
 
-  Args:
-    estimation_model: Name of the TFLite pose estimation model.
-    tracker_type: Type of Tracker('keypoint' or 'bounding_box').
-    classification_model: Name of the TFLite pose classification model.
-      (Optional)
-    label_file: Path to the label file for the pose classification model. Class
-      names are listed one name per line, in the same order as in the
-      classification model output. See an example in the yoga_labels.txt file.
-    camera_id: The camera id to be passed to OpenCV.
-    width: The width of the frame captured from the camera.
-    height: The height of the frame captured from the camera.
-  """
-
-  # Notify users that tracker is only enabled for MoveNet MultiPose model.
-  if tracker_type and (estimation_model != 'movenet_multipose'):
-    logging.warning(
-        'No tracker will be used as tracker can only be enabled for '
-        'MoveNet MultiPose model.')
-
-  # Initialize the pose estimator selected.
-  if estimation_model in ['movenet_lightning', 'movenet_thunder']:
-    pose_detector = Movenet(estimation_model)
-  elif estimation_model == 'posenet':
-    pose_detector = Posenet(estimation_model)
-  elif estimation_model == 'movenet_multipose':
-    pose_detector = MoveNetMultiPose(estimation_model, tracker_type)
-  else:
-    sys.exit('ERROR: Model is not supported.')
-
-  # Variables to calculate FPS
-  counter, fps = 0, 0
-  start_time = time.time()
-
-  # Start capturing video input from the camera
-  cap = cv2.VideoCapture(camera_id)
-  cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-  cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-
-  # Visualization parameters
-  row_size = 20  # pixels
-  left_margin = 24  # pixels
-  text_color = (0, 0, 255)  # red
-  font_size = 1
-  font_thickness = 1
-  classification_results_to_show = 3
-  fps_avg_frame_count = 10
-  keypoint_detection_threshold_for_classifier = 0.1
-  classifier = None
-
-  # Initialize the classification model
-  if classification_model:
-    classifier = Classifier(classification_model, label_file)
-    classification_results_to_show = min(classification_results_to_show,
-                                         len(classifier.pose_class_names))
-
-  # Continuously capture images from the camera and run inference
-  while cap.isOpened():
-    success, image = cap.read()
-    if not success:
-      sys.exit(
-          'ERROR: Unable to read from webcam. Please verify your webcam settings.'
-      )
-
-    counter += 1
-    image = cv2.flip(image, 1)
-
-    if estimation_model == 'movenet_multipose':
-      # Run pose estimation using a MultiPose model.
-      list_persons = pose_detector.detect(image)
+    # 2. 初始化模型
+    if estimation_model in ['movenet_lightning', 'movenet_thunder']:
+        pose_detector = Movenet(estimation_model)
+    elif estimation_model == 'posenet':
+        pose_detector = Posenet(estimation_model)
+    elif estimation_model == 'movenet_multipose':
+        pose_detector = MoveNetMultiPose(estimation_model, tracker_type)
     else:
-      # Run pose estimation using a SinglePose model, and wrap the result in an
-      # array.
-      list_persons = [pose_detector.detect(image)]
+        sys.exit('ERROR: 不支持的估计模型。')
 
-    # Draw keypoints and edges on input image
-    image = utils.visualize(image, list_persons)
+    # 3. 可视化与 FPS 参数
+    counter, fps = 0, 0
+    start_time = time.time()
+    row_size = 20; left_margin = 24
+    text_color = (0, 0, 255); font_size = 1; font_thickness = 1
+    fps_avg_frame_count = 10
+    keypoint_thresh = 0.1
 
-    if classifier:
-      # Check if all keypoints are detected before running the classifier.
-      # If there's a keypoint below the threshold, show an error.
-      person = list_persons[0]
-      min_score = min([keypoint.score for keypoint in person.keypoints])
-      if min_score < keypoint_detection_threshold_for_classifier:
-        error_text = 'Some keypoints are not detected.'
-        text_location = (left_margin, 2 * row_size)
-        cv2.putText(image, error_text, text_location, cv2.FONT_HERSHEY_PLAIN,
-                    font_size, text_color, font_thickness)
-        error_text = 'Make sure the person is fully visible in the camera.'
-        text_location = (left_margin, 3 * row_size)
-        cv2.putText(image, error_text, text_location, cv2.FONT_HERSHEY_PLAIN,
-                    font_size, text_color, font_thickness)
-      else:
-        # Run pose classification
-        prob_list = classifier.classify_pose(person)
+    # 4. 初始化分类器（如果需要）
+    classifier = None
+    show_n = 3
+    if classification_model:
+        classifier = Classifier(classification_model, label_file)
+        show_n = min(show_n, len(classifier.pose_class_names))
 
-        # Show classification results on the image
-        for i in range(classification_results_to_show):
-          class_name = prob_list[i].label
-          probability = round(prob_list[i].score, 2)
-          result_text = class_name + ' (' + str(probability) + ')'
-          text_location = (left_margin, (i + 2) * row_size)
-          cv2.putText(image, result_text, text_location, cv2.FONT_HERSHEY_PLAIN,
-                      font_size, text_color, font_thickness)
+    # 5. 主循环
+    while True:
+        frame = picam2.capture_array()  # 获取 RGB ndarray
+        if frame is None:
+            sys.exit('ERROR: Picamera2 未获取到帧。')
+        counter += 1
+        img = cv2.flip(frame, 1)
 
-    # Calculate the FPS
-    if counter % fps_avg_frame_count == 0:
-      end_time = time.time()
-      fps = fps_avg_frame_count / (end_time - start_time)
-      start_time = time.time()
+        # 姿态检测
+        persons = (pose_detector.detect(img)
+                   if estimation_model == 'movenet_multipose'
+                   else [pose_detector.detect(img)])
+        img = utils.visualize(img, persons)
 
-    # Show the FPS
-    fps_text = 'FPS = ' + str(int(fps))
-    text_location = (left_margin, row_size)
-    cv2.putText(image, fps_text, text_location, cv2.FONT_HERSHEY_PLAIN,
-                font_size, text_color, font_thickness)
+        # 姿态分类
+        if classifier:
+            p = persons[0]
+            if min(k.score for k in p.keypoints) >= keypoint_thresh:
+                probs = classifier.classify_pose(p)
+                for i in range(min(show_n, len(probs))):
+                    cv2.putText(
+                        img,
+                        f"{probs[i].label} ({round(probs[i].score,2)})",
+                        (left_margin, (i+2)*row_size),
+                        cv2.FONT_HERSHEY_PLAIN,
+                        font_size,
+                        text_color,
+                        font_thickness
+                    )
+            else:
+                cv2.putText(
+                    img,
+                    'Some keypoints are not detected.',
+                    (left_margin, 2*row_size),
+                    cv2.FONT_HERSHEY_PLAIN,
+                    font_size,
+                    text_color,
+                    font_thickness
+                )
 
-    # Stop the program if the ESC key is pressed.
-    if cv2.waitKey(1) == 27:
-      break
-    cv2.imshow(estimation_model, image)
+        # 计算并显示 FPS
+        if counter % fps_avg_frame_count == 0:
+            now = time.time()
+            fps = fps_avg_frame_count / (now - start_time)
+            start_time = now
+        cv2.putText(
+            img,
+            f"FPS = {int(fps)}",
+            (left_margin, row_size),
+            cv2.FONT_HERSHEY_PLAIN,
+            font_size,
+            text_color,
+            font_thickness
+        )
 
-  cap.release()
-  cv2.destroyAllWindows()
+        # 显示与退出
+        cv2.imshow(estimation_model, img)
+        if cv2.waitKey(1) == 27:  # ESC 键
+            break
 
+    # 清理
+    picam2.stop()
+    cv2.destroyAllWindows()
 
 def main():
   parser = argparse.ArgumentParser(
@@ -175,16 +154,19 @@ def main():
       required=False,
       default='labels.txt')
   parser.add_argument(
-      '--cameraId', help='Id of camera.', required=False, default=0)
+      '--cameraId', help='Id of camera (CSI 模块不使用此参数).',
+      required=False, default=0)
   parser.add_argument(
       '--frameWidth',
       help='Width of frame to capture from camera.',
       required=False,
+      type=int,
       default=640)
   parser.add_argument(
       '--frameHeight',
       help='Height of frame to capture from camera.',
       required=False,
+      type=int,
       default=480)
   args = parser.parse_args()
 
